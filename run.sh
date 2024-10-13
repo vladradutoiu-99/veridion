@@ -1,1 +1,0 @@
-scrapy runspider spider.py --loglevel=ERROR

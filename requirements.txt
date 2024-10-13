@@ -1,4 +1,0 @@
-scrapy
-fastapi
-uvicorn
-pandas

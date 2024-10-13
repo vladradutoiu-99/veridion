@@ -9,7 +9,7 @@ Logs are stored using Logstash and the traces are collected using otel-collector
 
 ## Run locally
 
-1. Use celery dir as your working dir
+1. Use the root of the repo as your working dir
 2. Use docker compose up --build to start and build the containers
 3. `Optional` First time buiding kibana, you have to configure the apm server manually by navigating in the left bar to APM and enable default integration. You do not have to enable elastic agent integration.
 4. If you have not encountered any errors, you should be able to access your services
