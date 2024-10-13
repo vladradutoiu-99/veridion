@@ -1,0 +1,21 @@
+apm-server:
+  host: "0.0.0.0:8200"
+  rum:
+    enabled: true
+  kibana:
+    enabled: true
+    host: "kibana:5601"
+    username: "elastic"
+    password: "elastic"
+output.elasticsearch:
+  hosts: ["https://elasticsearch:9200"]
+  ssl.verification_mode: none
+  username: "elastic"
+  password: "elastic"
+setup.kibana:
+  host: "kibana:5601"
+  username: "elastic"
+  password: "elastic"
+setup.template.settings:
+  index.number_of_replicas: 0
+# apm-server.auth.secret_token: "secret"

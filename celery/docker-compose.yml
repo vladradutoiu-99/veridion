@@ -1,0 +1,370 @@
+version: "3.8"
+services:
+  redis:
+    image: redis:6.2-alpine
+    restart: always
+    hostname: redis
+    ports:
+      - '6379:6379'
+    command: redis-server --save 20 1 --loglevel warning
+    volumes:
+      - redis-cache:/data
+    networks:
+      - workers
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: 'rabbitmq'
+    ports:
+        - 5672:5672
+        - 15672:15672
+    networks:
+      - workers
+
+  service:
+    build: 
+      context: server/
+    ports:
+      - 8080:80
+    links:
+      - "redis:redis"
+    depends_on:
+      logstash:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      otel:
+        condition: service_started
+    volumes:
+      - certs:/usr/share/elastic/certs
+    env_file:
+      - .env
+    networks:
+      - workers
+
+  worker:
+    build:
+      context: worker/
+    links:
+      - "redis:redis"
+    depends_on:
+      logstash:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      otel:
+        condition: service_started
+    env_file:
+      - .env
+    deploy:
+      mode: replicated
+      replicas: 5
+    volumes:
+      - certs:/usr/share/elastic/certs
+    networks:
+      - workers
+
+  otel:
+    image: otel/opentelemetry-collector:latest
+    command: ["--config=/etc/otel-collector-config.yml"]
+    depends_on:
+      logstash:
+        condition: service_healthy
+    env_file:
+      - .env
+    volumes:
+      - "./configs/otel-collector-config.yml:/etc/otel-collector-config.yml"
+      - certs:/etc/certs
+    ports:
+      - 4317:4317  # OTLP gRPC receiver
+      - 4318:4318  # OTLP HTTP receiver
+    networks:
+      - workers
+      - elk
+
+  setup:
+   image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+   volumes:
+     - certs:/usr/share/elasticsearch/config/certs
+   user: "0"
+   command: >
+     bash -c '
+       if [ x${ELASTIC_PASSWORD} == x ]; then
+         echo "Set the ELASTIC_PASSWORD environment variable in the .env file";
+         exit 1;
+       elif [ x${KIBANA_PASSWORD} == x ]; then
+         echo "Set the KIBANA_PASSWORD environment variable in the .env file";
+         exit 1;
+       fi;
+       if [ ! -f config/certs/ca.zip ]; then
+         echo "Creating CA";
+         bin/elasticsearch-certutil ca --silent --pem -out config/certs/ca.zip;
+         unzip config/certs/ca.zip -d config/certs;
+       fi;
+       if [ ! -f config/certs/certs.zip ]; then
+         echo "Creating certs";
+         echo -ne \
+         "instances:\n"\
+         "  - name: elasticsearch\n"\
+         "    dns:\n"\
+         "      - elasticsearch\n"\
+         "      - localhost\n"\
+         "    ip:\n"\
+         "      - 127.0.0.1\n"\
+         "  - name: kibana\n"\
+         "    dns:\n"\
+         "      - kibana\n"\
+         "      - localhost\n"\
+         "    ip:\n"\
+         "      - 127.0.0.1\n"\
+         > config/certs/instances.yml;
+         bin/elasticsearch-certutil cert --silent --pem -out config/certs/certs.zip --in config/certs/instances.yml --ca-cert config/certs/ca/ca.crt --ca-key config/certs/ca/ca.key;
+         unzip config/certs/certs.zip -d config/certs;
+       fi;
+       echo "Setting file permissions"
+       chown -R root:root config/certs;
+       find . -type d -exec chmod 755 \{\} \;;
+       find . -type f -exec chmod 644 \{\} \;;
+       echo "Waiting for Elasticsearch availability";
+       until curl -s --cacert config/certs/ca/ca.crt https://elasticsearch:9200 | grep -q "missing authentication credentials"; do sleep 30; done;
+       echo "Setting kibana_system password";
+       until curl -s -X POST --cacert config/certs/ca/ca.crt -u "${ELASTIC_USERNAME}:${ELASTIC_PASSWORD}" -H "Content-Type: application/json" https://elasticsearch:9200/_security/user/kibana_system/_password -d "{\"password\":\"${KIBANA_PASSWORD}\"}" | grep -q "^{}"; do sleep 10; done;
+       echo "All done!";
+     '
+   healthcheck:
+     test: ["CMD-SHELL", "[ -f config/certs/elasticsearch/elasticsearch.crt ]"]
+     interval: 1s
+     timeout: 5s
+     retries: 120
+   networks:
+     - elk
+    
+  elasticsearch:
+   depends_on:
+     setup:
+       condition: service_healthy
+   image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+   labels:
+     co.elastic.logs/module: elasticsearch
+   volumes:
+     - certs:/usr/share/elasticsearch/config/certs
+     - esdata01:/usr/share/elasticsearch/data
+     - ./configs/elastic.yml:/usr/share/elasticsearch/config/elasticsearch.yml
+   ports:
+     - ${ELASTIC_PORT}:9200
+   environment:
+     - node.name=elasticsearch
+     - cluster.name=${CLUSTER_NAME}
+     - discovery.type=single-node
+     - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+     - bootstrap.memory_lock=true
+     - xpack.security.enabled=true
+     - xpack.security.http.ssl.enabled=true
+     - xpack.security.http.ssl.key=certs/elasticsearch/elasticsearch.key
+     - xpack.security.http.ssl.certificate=certs/elasticsearch/elasticsearch.crt
+     - xpack.security.http.ssl.certificate_authorities=certs/ca/ca.crt
+     - xpack.security.transport.ssl.enabled=true
+     - xpack.security.transport.ssl.key=certs/elasticsearch/elasticsearch.key
+     - xpack.security.transport.ssl.certificate=certs/elasticsearch/elasticsearch.crt
+     - xpack.security.transport.ssl.certificate_authorities=certs/ca/ca.crt
+     - xpack.security.transport.ssl.verification_mode=certificate
+   mem_limit: ${ES_MEM_LIMIT}
+   ulimits:
+     memlock:
+       soft: -1
+       hard: -1
+   healthcheck:
+     test:
+       [
+         "CMD-SHELL",
+         "curl -s --cacert config/certs/ca/ca.crt https://localhost:9200 | grep -q 'missing authentication credentials'",
+       ]
+     interval: 10s
+     timeout: 10s
+     retries: 120
+   networks:
+    - elk
+    - workers
+
+  kibana:
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    image: docker.elastic.co/kibana/kibana:${STACK_VERSION}
+    env_file:
+      - .env
+    labels:
+      co.elastic.logs/module: kibana
+    volumes:
+      - certs:/usr/share/kibana/config/certs
+      - kibanadata:/usr/share/kibana/data
+      - ./configs/kibana.yml:/usr/share/kibana/config/kibana.yml
+    ports:
+      - ${KIBANA_PORT}:5601
+    environment:
+      - SERVERNAME=kibana
+      - ELASTICSEARCH_HOSTS=https://${ELASTIC_URL}:${ELASTIC_PORT}
+      - ELASTICSEARCH_USERNAME=kibana_system
+      - ELASTICSEARCH_PASSWORD=${KIBANA_PASSWORD}
+      - ELASTICSEARCH_SSL_CERTIFICATEAUTHORITIES=config/certs/ca/ca.crt
+      - APM_SERVERS=http://${APM_URL}:8200
+      - XPACK_SECURITY_ENCRYPTIONKEY=${ENCRYPTION_KEY}
+      - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=${ENCRYPTION_KEY}
+      - XPACK_REPORTING_ENCRYPTIONKEY=${ENCRYPTION_KEY}
+    mem_limit: ${KB_MEM_LIMIT}
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -s -I http://localhost:5601 | grep -q 'HTTP/1.1 302 Found'",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 120
+    networks:
+      - elk
+
+  metricbeat:
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      kibana:
+        condition: service_healthy
+      logstash:
+        condition: service_healthy
+    image: docker.elastic.co/beats/metricbeat:${STACK_VERSION}
+    user: root
+    volumes:
+      - certs:/usr/share/metricbeat/certs
+      - metricbeatdata:/usr/share/metricbeat/data
+      - "./configs/metricbeat.yml:/usr/share/metricbeat/metricbeat.yml:ro"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "/sys/fs/cgroup:/hostfs/sys/fs/cgroup:ro"
+      - "/proc:/hostfs/proc:ro"
+      - "/:/hostfs:ro"
+    environment:
+      - ELASTIC_USER=${ELASTIC_USERNAME}
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - ELASTIC_HOSTS=https://${ELASTIC_URL}:${ELASTIC_PORT}
+      - KIBANA_HOSTS=http://${KIBANA_URL}:${KIBANA_PORT}
+      - LOGSTASH_HOSTS=http://${LOGSTASH_URL}:${LOGSTASH_PORT}
+    networks:
+      - elk
+    command:
+      - metricbeat
+      - -e
+      - -strict.perms=false
+
+  filebeat:
+   depends_on:
+     elasticsearch:
+       condition: service_healthy
+   image: docker.elastic.co/beats/filebeat:${STACK_VERSION}
+   user: root
+   volumes:
+     - certs:/usr/share/filebeat/certs
+     - filebeatdata:/usr/share/filebeat/data
+     - "./filebeat_ingest_data/:/usr/share/filebeat/ingest_data/"
+     - "./configs/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro"
+     - "/var/lib/docker/containers:/var/lib/docker/containers:ro"
+     - "/var/run/docker.sock:/var/run/docker.sock:ro"
+   environment:
+     - ELASTIC_USER=${ELASTIC_USERNAME}
+     - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+     - ELASTIC_HOSTS=https://${ELASTIC_URL}:${ELASTIC_PORT}
+     - KIBANA_HOSTS=http://{KIBANA_URL}:${KIBANA_PORT}
+     - LOGSTASH_HOSTS=http://{LOGSTASH_URL}:${LOGSTASH_PORT}
+   networks:
+     - elk
+   command:
+      - filebeat
+      - -e
+      - -strict.perms=false
+
+  apm:
+    image: docker.elastic.co/apm/apm-server:${STACK_VERSION}
+    env_file:
+      - .env
+    environment:
+     - ELASTIC_USER=${ELASTIC_USERNAME}
+     - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+     - ELASTIC_HOSTS=https://${ELASTIC_URL}:${ELASTIC_PORT}
+    command: >
+      apm-server -e
+        -E apm-server.rum.enabled=true
+        -E setup.kibana.host=http://kibana:5601
+        -E setup.template.settings.index.number_of_replicas=0
+        -E apm-server.kibana.enabled=true
+        -E apm-server.kibana.host=http://kibana:5601
+        -E apm-server.kibana.username=${ELASTIC_USERNAME}
+        -E apm-server.kibana.password=${ELASTIC_PASSWORD}
+        -E output.elasticsearch.hosts=["https://${ELASTIC_URL}:${ELASTIC_PORT}"]
+        -E output.elasticsearch.protocol=https
+        -E output.elasticsearch.username=${ELASTIC_USERNAME}
+        -E output.elasticsearch.password=${ELASTIC_PASSWORD}
+        -E output.elasticsearch.ssl.enabled=true
+        -E output.elasticsearch.ssl.certificate_authorities="/usr/share/apm-server/certs/ca/ca.crt"
+        -E output.elasticsearch.ssl.certificate="/usr/share/apm-server/certs/elasticsearch/elasticsearch.crt"
+        -E output.elasticsearch.ssl.key="/usr/share/apm-server/certs/elasticsearch/elasticsearch.key"
+    ports:
+      - "8200:8200"  # APM server default port
+    depends_on:
+      - elasticsearch
+    volumes:
+     - certs:/usr/share/apm-server/certs
+     - "./configs/apm-server.yml:/usr/share/apm-server/apm-server.yml:ro"
+    networks:
+      - elk
+
+  logstash:
+   depends_on:
+     elasticsearch:
+       condition: service_healthy
+     kibana:
+       condition: service_healthy
+   image: docker.elastic.co/logstash/logstash:${STACK_VERSION}
+   healthcheck:
+     test: ["CMD-SHELL", "curl -s http://localhost:9600/_node/pipelines?pretty | grep -q 'pipelines'"]
+     interval: 10s
+     timeout: 5s
+     retries: 5
+   labels:
+     co.elastic.logs/module: logstash
+   user: root
+   volumes:
+     - certs:/usr/share/logstash/certs
+     - logstashdata:/usr/share/logstash/data
+     - "./logstash_ingest_data/:/usr/share/logstash/ingest_data/"
+     - "./configs/logstash.conf:/usr/share/logstash/pipeline/logstash.conf:ro"
+   environment:
+     - xpack.monitoring.enabled=false
+     - ELASTIC_USER=${ELASTIC_USERNAME}
+     - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+     - ELASTIC_HOSTS=https://${ELASTIC_URL}:${ELASTIC_PORT}
+   networks:
+     - elk
+     - workers
+
+volumes:
+  redis-cache:
+    driver: local
+  certs:
+    driver: local
+  esdata01:
+    driver: local
+  kibana-config:
+    driver: local
+  kibanadata:
+   driver: local
+  metricbeatdata:
+    driver: local
+  filebeatdata:
+    driver: local
+  logstashdata:
+    driver: local
+
+networks:
+  elk:
+    driver: bridge
+  workers:
+    driver: bridge

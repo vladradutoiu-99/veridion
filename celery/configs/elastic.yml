@@ -1,0 +1,5 @@
+cluster.name: "docker-cluster"
+network.host: 0.0.0.0
+tracing.apm.enabled: true
+tracing.apm.agent.server_url: "http://apm:8200"
+ingest.geoip.downloader.enabled: false
