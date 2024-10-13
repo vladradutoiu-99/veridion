@@ -9,7 +9,7 @@ from app.utils.logging_module.logger import logger
 
 class MySpider(scrapy.Spider):
     name = 'scrap_spider'
-    max_url_depth = 3
+    max_url_depth = 1
     
     def __init__(self, start_urls, *args, **kwargs):
         super(MySpider, self).__init__(*args, **kwargs)
@@ -42,15 +42,15 @@ class MySpider(scrapy.Spider):
             }
         
     def parse(self, response: Request):
-        phone_numbers = response.xpath('//text()[re:test(., "\(\d{3}\) \d{3}-\d{4}")]/text()').extract()
-        phone_numbers = [num.strip() for num in phone_numbers if re.match(r"\(\d{3}\) \d{3}-\d{4}", num.strip())]
+        phone_numbers = response.xpath('//text()[re:test(., "\(?\+?\d{0,2}\)?[\s.-]?\d{3}[\s.-]?\d{3}[\s.-]?\d{4}")]/text()').extract()
+        phone_numbers = [num.strip() for num in phone_numbers if re.match(r"\(?\+?\d{0,2}\)?[\s.-]?\d{3}[\s.-]?\d{3}[\s.-]?\d{4}", num.strip())]
 
-        social_media_links = response.css('a::attr(href)').re(r'(https?://(?:www\.)?(?:facebook|twitter|instagram|linkedin)\.com/\S+)')
+        social_media_links = response.css('a::attr(href)').re(r'(https?://(?:www\.)?(?:facebook|twitter|instagram|linkedin|tiktok|snapchat)\.(?:com|net)/[^\s]+)')
 
-        addresses = response.xpath('//text()[re:test(., "\d{1,5}\s\w+\s\w+")]').extract()
-        addresses = [address.strip() for address in addresses if re.match(r'\d{1,5}\s\w+\s\w+', address.strip())]
+        addresses = response.xpath('//text()[re:test(., "\d{1,5}\s\w+(\s\w+)*,\s?\w+(\s\w+)*")]').extract()
+        addresses = [address.strip() for address in addresses if re.match(r'\d{1,5}\s\w+(\s\w+)*,\s?\w+(\s\w+)*', address.strip())]
         
-        logger.debug(f"Scrapped data: {phone_numbers}, {social_media_links}, {addresses} from {response.url}")
+        # logger.debug(f"Scrapped data: {phone_numbers}, {social_media_links}, {addresses} from {response.url}")
 
         yield {
             'URL': response.url,
@@ -62,8 +62,13 @@ class MySpider(scrapy.Spider):
         
         url_depth = response.url.count('/') - response.url.count('//') - 1  # Adjust for protocol (http/https)
         
-        # Follow pagination link to the next page if URL depth is within limit
         if url_depth < self.max_url_depth:
-            next_page = response.xpath('//a[contains(text(), "Next")]/@href').get()
-            if next_page:
-                yield response.follow(next_page, self.parse)
+            next_pages = response.xpath('//a[contains(text(), "Next") or contains(text(), "Older") or contains(text(), "More") or contains(text(), "Continue") or re:test(., "\d+")]')
+        
+            for next_page in next_pages:
+                next_page_url = next_page.xpath('@href').get()
+                if next_page_url:
+                    if not next_page_url.startswith(('http://', 'https://')):
+                        next_page_url = response.urljoin(next_page_url)
+                    
+                    yield response.follow(next_page_url, self.parse)

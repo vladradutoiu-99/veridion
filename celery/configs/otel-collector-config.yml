@@ -7,7 +7,7 @@ receivers:
         endpoint: 0.0.0.0:4318
 
 exporters:
-  debug:  # Keep debug exporter for troubleshooting
+  debug:
   otlphttp:
     endpoint: "http://apm:8200"
 

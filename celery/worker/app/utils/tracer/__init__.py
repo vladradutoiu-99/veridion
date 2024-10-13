@@ -25,7 +25,6 @@ def initialize_tracer_without_instrumentation(service_name: str):
         resource=Resource.create({SERVICE_NAME: service_name})
     ))
 
-    # OTLP exporter (send to collector)
     otlp_exporter = OTLPSpanExporter(endpoint=OTEL_HOST)
     span_processor = SimpleSpanProcessor(otlp_exporter)
     

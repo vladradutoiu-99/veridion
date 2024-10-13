@@ -307,7 +307,7 @@ services:
         -E output.elasticsearch.ssl.certificate="/usr/share/apm-server/certs/elasticsearch/elasticsearch.crt"
         -E output.elasticsearch.ssl.key="/usr/share/apm-server/certs/elasticsearch/elasticsearch.key"
     ports:
-      - "8200:8200"  # APM server default port
+      - "8200:8200"
     depends_on:
       - elasticsearch
     volumes:

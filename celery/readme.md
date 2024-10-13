@@ -1,36 +1,31 @@
-# Prereq
+## Web scraper with Celery, Scrapy and ELK stack
 
-- Docker
-- docker-compose
-- Python
+The server is using FastApi for api management. The scraping is done using distributed tasks using celery. Each celery worker runs scrapy tasks for the web scraping part.
 
-## Installation
+The extracted data is indexed in elasticsearch at the end of each task.
 
-Use the package manager [pip](https://pip.pypa.io/en/stable/) to install requirements.
+Monitoring is realised using opentelemetry and loguru for logging and tracing.
+Logs are stored using Logstash and the traces are collected using otel-collector and APM server.
 
-```bash
-pip install -r requirements.txt
-```
+## Run locally
 
-Copy docai folder from memory_leaks folder to memory_leaks/worker folder.
+1. Use celery dir as your working dir
+2. Use docker compose up --build to start and build the containers
+3. `Optional` First time buiding kibana, you have to configure the apm server manually by navigating in the left bar to APM and enable default integration. You do not have to enable elastic agent integration.
+4. If you have not encountered any errors, you should be able to access your services
 
-## Usage
+## Crawling, Indexing and Searching
 
-Making changes to the application would require stopping the process and re-running the starting command.
+* For starting the crawling from the list of website, use `POST` at localhost:8080/crawl-async with body `{'number_of_domains': int}`. The tasks are done in background and you can check the indexing using the index `scrapped_data` in kibana to view the data as it is added.
 
-Start the container:
+* For checking the time a crawl took, you can go in kibana to APM -> services -> server_app and check the last traces. You can see how many tasks were, if any errors were encountered and the total time taken.
 
-```bash
-docker-compose up --build
-```
+* Searching is done with `GET` at localhost:8080/query-index with query parameters:
+`name: Optional[str]
+url: Optional[str]
+phone_number: Optional[str] 
+social_media_links: Optional[str] 
+facebook: Optional[str] 
+addresses: Optional[str] `. You will receive the most appropiate result if there is any based on your parameters. The querying has to be done after populating the index by crawling.
 
-Check container resources:
-```bash
-docker stats
-```
 
-Call the endpoint:
-curl -X POST --header "Content-Type: application/json" --data @body.json http://localhost:8080/process
-
-Solution:
-The only really reliable way to ensure that a large but temporary use of memory DOES return all resources to the system when it's done, is to have that use happen in a subprocess, which does the memory-hungry work then terminates. Under such conditions, the operating system WILL do its job, and gladly recycle all the resources the subprocess may have gobbled up. Fortunately, the multiprocessing module makes this kind of operation (which used to be rather a pain) not too bad in modern versions of Python.

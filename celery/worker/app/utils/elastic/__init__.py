@@ -20,7 +20,7 @@ class ElasticSearch():
             basic_auth=(ELASTIC_USERNAME, ELASTIC_PASSWORD),
         )
         
-        logger.debug(f"Elasticsearch connection established {self.es.info()}")
+        # logger.debug(f"Elasticsearch connection established {self.es.info()}")
 
     def index_data(self, index:str, data: CrawlResponse):
         self.es.index(index=index, body=data.__dict__)

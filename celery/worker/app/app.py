@@ -33,12 +33,6 @@ app = Celery(
     CELERY_BROKER_HEARTBEAT=0
 )
 
-# app.conf.task_routes = {
-#     'crawl_task': {'queue': 'crawler_queue'},
-#     'index_crawl_data': {'queue': 'crawler_queue_index'},
-#     'crawl_task_callback': {'queue': 'crawler_queue'}
-# }
-
 def add_additional_data_to_response(response: CrawlResponse):
     response = parser.add_data(response)
     return response
@@ -57,7 +51,7 @@ def test(self: Task, url: List[str]):
         dispatcher.connect(collect_item, signal=signals.item_scraped)
 
         process.crawl(MySpider, start_urls=url)
-        process.start()
+        process.start(stop_after_crawl=True)
         
         return scraped_data
 

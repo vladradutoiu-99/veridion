@@ -99,7 +99,6 @@ def get_logger(logger_name):
     logstash_handler = LogstashHandler(host=logstash_url, port=int(logstash_port))  # Adjust host/port as needed
     logstash_handler.setLevel(logging.DEBUG)
     
-    # Logstash log format (you can use JSON format for structured logging)
     logstash_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     logstash_formatter = logging.Formatter(logstash_format, datefmt='%Y-%m-%d %H:%M:%S')
     logstash_handler.setFormatter(logstash_formatter)

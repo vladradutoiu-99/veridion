@@ -3,8 +3,6 @@ import pandas as pd
 from app.restschema import CrawlResponse
 from app.utils.logging_module.logger import logger
 
-import numpy as np
-
 headers = ['domain', 'company_commercial_name', 'company_legal_name', 'company_all_available_names']
 
 class Parser:
